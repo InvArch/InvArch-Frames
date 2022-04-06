@@ -1,11 +1,11 @@
 [package]
 authors = ['InvArchitects <https://github.com/InvArch>']
-description = 'IPS Pallet for creating and managing sets of tokenized IP'
-edition = '2018'
+description = 'IPT Pallet'
+edition = '2021'
 homepage = 'https://invarch.network'
 license = 'GPLv3'
 name = 'pallet-ipt'
-repository = 'https://github.com/InvArch/InvArch-Pallet-Library/ips'
+repository = 'https://github.com/InvArch/InvArch-Pallet-Library/ipt'
 version = '0.1.0-dev'
 
 [dependencies]
@@ -19,7 +19,7 @@ frame-system = { git = "https://github.com/paritytech/substrate", branch = "polk
 scale-info = { version = "2.0.0", features = ["derive"], default-features = false }
 
 # InvArch dependencies
-primitives = { package = "invarch-primitives", path = "../../primitives", default-features = false }
+primitives = { package = "invarch-primitives", path = "../../primitives", default-features = false, features = ["utils"] }
 
 sp-io = { git = "https://github.com/paritytech/substrate", branch = "polkadot-v0.9.18", default-features = false }
 sp-core = { git = "https://github.com/paritytech/substrate", branch = "polkadot-v0.9.18", default-features = false }

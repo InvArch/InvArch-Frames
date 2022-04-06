@@ -1,7 +1,7 @@
 [package]
 authors = ['InvArchitects <https://github.com/InvArch>']
 description = 'IPF Pallet for tokenizing and managing intellectual property'
-edition = '2018'
+edition = '2021'
 homepage = 'https://invarch.network'
 license = 'GPLv3'
 name = 'pallet-ipf'
@@ -15,7 +15,7 @@ sp-runtime = { git = "https://github.com/paritytech/substrate", branch = "polkad
 sp-std = { git = "https://github.com/paritytech/substrate", branch = "polkadot-v0.9.18", default-features = false }
 frame-support = { git = "https://github.com/paritytech/substrate", branch = "polkadot-v0.9.18", default-features = false }
 frame-system = { git = "https://github.com/paritytech/substrate", branch = "polkadot-v0.9.18", default-features = false }
-primitives = { package = "invarch-primitives", path = "../../primitives", default-features = false }
+primitives = { package = "invarch-primitives", path = "../../primitives", default-features = false, features = ["utils"] }
 sp-core = { git = "https://github.com/paritytech/substrate", branch = "polkadot-v0.9.18", default-features = false }
 sp-io = { git = "https://github.com/paritytech/substrate", branch = "polkadot-v0.9.18", default-features = false }
 scale-info = { version = "2.0.0", features = ["derive"], default-features = false }

@@ -118,46 +118,32 @@ pub mod pallet {
             metadata: Vec<u8>,
             data: T::Hash,
         ) -> DispatchResultWithPostInfo {
-            NextIpfId::<T>::try_mutate(|id| -> DispatchResultWithPostInfo {
-                let owner = ensure_signed(owner)?;
-                let bounded_metadata: BoundedVec<u8, T::MaxIpfMetadata> = metadata
+            let owner = ensure_signed(owner)?;
+            let ipf_id = NextIpfId::<T>::get();
+
+            Self::internal_mint(
+                owner.clone(),
+                metadata
                     .try_into()
-                    .map_err(|_| Error::<T>::MaxMetadataExceeded)?;
+                    .map_err(|_| Error::<T>::MaxMetadataExceeded)?,
+                data,
+            )?;
 
-                let ipf_id = *id;
-                *id = id
-                    .checked_add(&One::one())
-                    .ok_or(Error::<T>::NoAvailableIpfId)?;
+            Self::deposit_event(Event::Minted(owner, ipf_id, data));
 
-                let ipf_info = IpfInfo {
-                    metadata: bounded_metadata,
-                    owner: owner.clone(),
-                    author: owner.clone(),
-                    data,
-                };
-                IpfStorage::<T>::insert(ipf_id, ipf_info);
-                IpfByOwner::<T>::insert(owner.clone(), ipf_id, ());
-
-                Self::deposit_event(Event::Minted(owner, ipf_id, data));
-
-                Ok(().into())
-            })
+            Ok(().into())
         }
 
         /// Burn IPF(Intellectual Property Token) from `owner`
         #[pallet::weight(100_000 + T::DbWeight::get().reads_writes(1, 2))]
         pub fn burn(owner: OriginFor<T>, ipf_id: T::IpfId) -> DispatchResult {
-            IpfStorage::<T>::try_mutate(ipf_id, |ipf_info| -> DispatchResult {
-                let owner = ensure_signed(owner)?;
-                let t = ipf_info.take().ok_or(Error::<T>::IpfNotFound)?;
-                ensure!(t.owner == owner, Error::<T>::NoPermission);
+            let owner = ensure_signed(owner)?;
 
-                IpfByOwner::<T>::remove(owner.clone(), ipf_id);
+            Self::internal_burn(owner.clone(), ipf_id)?;
 
-                Self::deposit_event(Event::Burned(owner, ipf_id));
+            Self::deposit_event(Event::Burned(owner, ipf_id));
 
-                Ok(())
-            })
+            Ok(())
         }
     }
 
@@ -177,6 +163,41 @@ pub mod pallet {
 
                 IpfByOwner::<T>::remove(owner, ipf_id);
                 IpfByOwner::<T>::insert(target, ipf_id, ());
+
+                Ok(())
+            })
+        }
+
+        pub fn internal_mint(
+            owner: T::AccountId,
+            metadata: BoundedVec<u8, T::MaxIpfMetadata>,
+            data: T::Hash,
+        ) -> DispatchResult {
+            NextIpfId::<T>::try_mutate(|id| -> DispatchResult {
+                let ipf_id = *id;
+                *id = id
+                    .checked_add(&One::one())
+                    .ok_or(Error::<T>::NoAvailableIpfId)?;
+
+                let ipf_info = IpfInfo {
+                    metadata,
+                    owner: owner.clone(),
+                    author: owner.clone(),
+                    data,
+                };
+                IpfStorage::<T>::insert(ipf_id, ipf_info);
+                IpfByOwner::<T>::insert(owner.clone(), ipf_id, ());
+
+                Ok(())
+            })
+        }
+
+        pub fn internal_burn(owner: T::AccountId, ipf_id: T::IpfId) -> DispatchResult {
+            IpfStorage::<T>::try_mutate(ipf_id, |ipf_info| -> DispatchResult {
+                let t = ipf_info.take().ok_or(Error::<T>::IpfNotFound)?;
+                ensure!(t.owner == owner, Error::<T>::NoPermission);
+
+                IpfByOwner::<T>::remove(owner.clone(), ipf_id);
 
                 Ok(())
             })

@@ -22,7 +22,8 @@ sp-io = { git = "https://github.com/paritytech/substrate", default-features = fa
 
 
 [features]
-default = ["std"]
+default = ["std", "utils"]
+utils = []
 std = [
     "serde",
     "codec/std",

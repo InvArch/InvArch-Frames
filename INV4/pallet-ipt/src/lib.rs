@@ -192,11 +192,7 @@ pub mod pallet {
         ) -> DispatchResult {
             let owner = ensure_signed(owner)?;
 
-            let ipt = Ipt::<T>::get(ips_id).ok_or(Error::<T>::IptDoesntExist)?;
-
-            ensure!(owner == ipt.owner, Error::<T>::NoPermission);
-
-            Pallet::<T>::internal_mint(target.clone(), ips_id, amount)?;
+            Pallet::<T>::internal_mint(owner, target.clone(), ips_id, amount)?;
 
             Self::deposit_event(Event::Minted(ips_id, target, amount));
 
@@ -580,16 +576,19 @@ pub mod pallet {
         }
 
         pub fn internal_mint(
+            caller: T::AccountId,
             target: T::AccountId,
             ips_id: T::IptId,
             amount: <T as pallet::Config>::Balance,
         ) -> DispatchResult {
             Ipt::<T>::try_mutate(ips_id, |ipt| -> DispatchResult {
                 Balance::<T>::try_mutate(ips_id, target, |balance| -> DispatchResult {
+                    let mut old_ipt = ipt.take().ok_or(Error::<T>::IptDoesntExist)?;
+                    ensure!(caller == old_ipt.owner, Error::<T>::NoPermission);
+
                     let old_balance = balance.take().unwrap_or_default();
                     *balance = Some(old_balance + amount);
 
-                    let mut old_ipt = ipt.take().ok_or(Error::<T>::IptDoesntExist)?;
                     old_ipt.supply += amount;
                     *ipt = Some(old_ipt);
 

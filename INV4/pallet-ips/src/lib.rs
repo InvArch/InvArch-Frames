@@ -41,6 +41,7 @@ pub use pallet::*;
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
+    use frame_system::RawOrigin;
     use primitives::utils::multi_account_id;
     use primitives::{AnyId, IpsType, Parentage};
     use scale_info::prelude::fmt::Display;
@@ -151,10 +152,15 @@ pub mod pallet {
         Appended(
             T::AccountId,
             T::IpsId,
-            Vec<u8>,
+            Option<Vec<u8>>,
             Vec<AnyId<T::IpsId, T::IpfId>>,
         ),
-        Removed(T::AccountId, T::IpsId, Vec<u8>, Vec<AnyIdWithNewOwner<T>>),
+        Removed(
+            T::AccountId,
+            T::IpsId,
+            Option<Vec<u8>>,
+            Vec<AnyIdWithNewOwner<T>>,
+        ),
         AllowedReplica(T::IpsId),
         DisallowedReplica(T::IpsId),
         ReplicaCreated(T::AccountId, T::IpsId, T::IpsId),
@@ -200,65 +206,26 @@ pub mod pallet {
             data: Vec<<T as ipf::Config>::IpfId>,
             allow_replica: bool,
         ) -> DispatchResultWithPostInfo {
-            NextIpsId::<T>::try_mutate(|ips_id| -> DispatchResultWithPostInfo {
-                let creator = ensure_signed(owner.clone())?;
+            let creator = ensure_signed(owner.clone())?;
 
-                let bounded_metadata: BoundedVec<u8, T::MaxIpsMetadata> = metadata
+            let current_id = NextIpsId::<T>::get();
+
+            Self::internal_create_ips(
+                creator,
+                metadata
                     .try_into()
-                    .map_err(|_| Error::<T>::MaxMetadataExceeded)?;
+                    .map_err(|_| Error::<T>::MaxMetadataExceeded)?,
+                data.try_into()
+                    .map_err(|_| Error::<T>::MaxMetadataExceeded)?,
+                allow_replica,
+            )?;
 
-                let current_id = *ips_id;
-                *ips_id = ips_id
-                    .checked_add(&One::one())
-                    .ok_or(Error::<T>::NoAvailableIpsId)?;
+            let ips_account =
+                primitives::utils::multi_account_id::<T, <T as Config>::IpsId>(current_id, None);
 
-                ensure!(
-                    !data.clone().into_iter().any(|ipf_id| {
-                        ipf::IpfByOwner::<T>::get(creator.clone(), ipf_id).is_none()
-                    }),
-                    Error::<T>::NoPermission
-                );
+            Self::deposit_event(Event::Created(ips_account, current_id));
 
-                let ips_account = primitives::utils::multi_account_id::<T, <T as Config>::IpsId>(
-                    current_id, None,
-                );
-
-                for ipf in data.clone() {
-                    ipf::Pallet::<T>::send(creator.clone(), ipf, ips_account.clone())?
-                }
-
-                pallet_balances::Pallet::<T>::transfer_keep_alive(
-                    owner.clone(),
-                    T::Lookup::unlookup(ips_account.clone()),
-                    <T as pallet_balances::Config>::ExistentialDeposit::get(),
-                )?;
-
-                ipt::Pallet::<T>::create(
-                    ips_account.clone(),
-                    current_id.into(),
-                    vec![(creator, <T as ipt::Config>::ExistentialDeposit::get())],
-                );
-
-                let info = IpsInfo {
-                    parentage: Parentage::Parent(ips_account.clone()),
-                    metadata: bounded_metadata,
-                    data: data
-                        .into_iter()
-                        .map(AnyId::IpfId)
-                        .collect::<Vec<AnyId<<T as Config>::IpsId, <T as ipf::Config>::IpfId>>>()
-                        .try_into()
-                        .unwrap(),
-                    ips_type: IpsType::Normal,
-                    allow_replica, // TODO: Remove unwrap.
-                };
-
-                IpsStorage::<T>::insert(current_id, info);
-                IpsByOwner::<T>::insert(ips_account.clone(), current_id, ());
-
-                Self::deposit_event(Event::Created(ips_account, current_id));
-
-                Ok(().into())
-            })
+            Ok(().into())
         }
 
         /// Delete an IP Set and all of its contents
@@ -292,9 +259,167 @@ pub mod pallet {
             ips_id: T::IpsId,
             assets: Vec<AnyId<T::IpsId, T::IpfId>>,
             new_metadata: Option<Vec<u8>>,
+        ) -> DispatchResultWithPostInfo {
+            let caller_account = ensure_signed(owner.clone())?;
+
+            Self::internal_append(
+                caller_account.clone(),
+                ips_id,
+                assets.clone(),
+                new_metadata.clone(),
+            )?;
+
+            Self::deposit_event(Event::Appended(
+                caller_account,
+                ips_id,
+                new_metadata,
+                assets,
+            ));
+
+            Ok(().into())
+        }
+
+        /// Remove assets from an IP Set
+        #[pallet::weight(100_000)] // TODO: Set correct weight
+        pub fn remove(
+            owner: OriginFor<T>,
+            ips_id: T::IpsId,
+            assets: Vec<AnyIdWithNewOwner<T>>,
+            new_metadata: Option<Vec<u8>>,
+        ) -> DispatchResultWithPostInfo {
+            let caller_account = ensure_signed(owner.clone())?;
+
+            Self::internal_remove(
+                caller_account.clone(),
+                ips_id,
+                assets.clone(),
+                new_metadata.clone(),
+            )?;
+
+            Self::deposit_event(Event::Removed(caller_account, ips_id, new_metadata, assets));
+
+            Ok(().into())
+        }
+
+        /// Allows replicas of this IPS to be made.
+        #[pallet::weight(100_000)]
+        pub fn allow_replica(owner: OriginFor<T>, ips_id: T::IpsId) -> DispatchResultWithPostInfo {
+            let owner = ensure_signed(owner)?;
+
+            Self::internal_allow_replica(owner, ips_id)?;
+
+            Self::deposit_event(Event::AllowedReplica(ips_id));
+
+            Ok(().into())
+        }
+
+        /// Disallows replicas of this IPS to be made.
+        #[pallet::weight(100_000)]
+        pub fn disallow_replica(
+            owner: OriginFor<T>,
+            ips_id: T::IpsId,
+        ) -> DispatchResultWithPostInfo {
+            let owner = ensure_signed(owner)?;
+
+            Self::internal_disallow_replica(owner, ips_id)?;
+
+            Self::deposit_event(Event::DisallowedReplica(ips_id));
+
+            Ok(().into())
+        }
+
+        #[pallet::weight(100_000)]
+        pub fn create_replica(
+            owner: OriginFor<T>,
+            original_ips_id: T::IpsId,
+        ) -> DispatchResultWithPostInfo {
+            let creator = ensure_signed(owner.clone())?;
+
+            let current_id = NextIpsId::<T>::get();
+
+            let ips_account =
+                primitives::utils::multi_account_id::<T, <T as Config>::IpsId>(current_id, None);
+
+            Self::internal_create_replica(creator, original_ips_id)?;
+
+            Self::deposit_event(Event::ReplicaCreated(
+                ips_account,
+                current_id,
+                original_ips_id,
+            ));
+
+            Ok(().into())
+        }
+    }
+
+    impl<T: Config> Pallet<T> {
+        pub fn internal_create_ips(
+            creator: T::AccountId,
+            metadata: BoundedVec<u8, T::MaxIpsMetadata>,
+            data: BoundedVec<<T as ipf::Config>::IpfId, T::MaxIpsMetadata>,
+            allow_replica: bool,
+        ) -> DispatchResult {
+            NextIpsId::<T>::try_mutate(|ips_id| -> DispatchResult {
+                let current_id = *ips_id;
+                *ips_id = ips_id
+                    .checked_add(&One::one())
+                    .ok_or(Error::<T>::NoAvailableIpsId)?;
+
+                ensure!(
+                    !data.clone().into_iter().any(|ipf_id| {
+                        ipf::IpfByOwner::<T>::get(creator.clone(), ipf_id).is_none()
+                    }),
+                    Error::<T>::NoPermission
+                );
+
+                let ips_account = primitives::utils::multi_account_id::<T, <T as Config>::IpsId>(
+                    current_id, None,
+                );
+
+                for ipf in data.clone() {
+                    ipf::Pallet::<T>::send(creator.clone(), ipf, ips_account.clone())?
+                }
+
+                pallet_balances::Pallet::<T>::transfer_keep_alive(
+                    RawOrigin::Signed(creator.clone()).into(),
+                    T::Lookup::unlookup(ips_account.clone()),
+                    <T as pallet_balances::Config>::ExistentialDeposit::get(),
+                )
+                .map_err(|_| DispatchError::Other("transfer_keep_alive error."))?;
+
+                ipt::Pallet::<T>::create(
+                    ips_account.clone(),
+                    current_id.into(),
+                    vec![(creator, <T as ipt::Config>::ExistentialDeposit::get())],
+                );
+
+                let info = IpsInfo {
+                    parentage: Parentage::Parent(ips_account.clone()),
+                    metadata,
+                    data: data
+                        .into_iter()
+                        .map(AnyId::IpfId)
+                        .collect::<Vec<AnyId<<T as Config>::IpsId, <T as ipf::Config>::IpfId>>>()
+                        .try_into()
+                        .unwrap(),
+                    ips_type: IpsType::Normal,
+                    allow_replica, // TODO: Remove unwrap.
+                };
+
+                IpsStorage::<T>::insert(current_id, info);
+                IpsByOwner::<T>::insert(ips_account.clone(), current_id, ());
+
+                Ok(())
+            })
+        }
+
+        pub fn internal_append(
+            caller_account: T::AccountId,
+            ips_id: T::IpsId,
+            assets: Vec<AnyId<T::IpsId, T::IpfId>>,
+            new_metadata: Option<Vec<u8>>,
         ) -> DispatchResult {
             IpsStorage::<T>::try_mutate_exists(ips_id, |ips_info| -> DispatchResult {
-                let caller_account = ensure_signed(owner.clone())?;
                 let info = ips_info.take().ok_or(Error::<T>::IpsNotFound)?;
 
                 let parent_id = ips_id;
@@ -350,6 +475,7 @@ pub mod pallet {
 
                             for (account, amount) in ipt::Balance::<T>::iter_prefix(ips_id.into()) {
                                 ipt::Pallet::<T>::internal_mint(
+                                    caller_account.clone(),
                                     account.clone(),
                                     parent_id.into(),
                                     amount,
@@ -390,31 +516,17 @@ pub mod pallet {
                     allow_replica: info.allow_replica,
                 });
 
-                Self::deposit_event(Event::Appended(
-                    caller_account,
-                    ips_id,
-                    if let Some(metadata) = new_metadata {
-                        metadata
-                    } else {
-                        info.metadata.to_vec()
-                    },
-                    assets,
-                ));
-
                 Ok(())
             })
         }
 
-        /// Remove assets from an IP Set
-        #[pallet::weight(100_000)] // TODO: Set correct weight
-        pub fn remove(
-            owner: OriginFor<T>,
+        pub fn internal_remove(
+            caller_account: T::AccountId,
             ips_id: T::IpsId,
             assets: Vec<AnyIdWithNewOwner<T>>,
             new_metadata: Option<Vec<u8>>,
         ) -> DispatchResult {
             IpsStorage::<T>::try_mutate_exists(ips_id, |ips_info| -> DispatchResult {
-                let caller_account = ensure_signed(owner.clone())?;
                 let info = ips_info.take().ok_or(Error::<T>::IpsNotFound)?;
 
                 let ips_account = match info.parentage.clone() {
@@ -441,6 +553,10 @@ pub mod pallet {
                                 this_ips_id,
                                 |ips| -> DispatchResult {
                                     ipt::Pallet::<T>::internal_mint(
+                                        primitives::utils::multi_account_id::<
+                                            T,
+                                            <T as Config>::IpsId,
+                                        >(this_ips_id, None),
                                         new_owner,
                                         this_ips_id.into(),
                                         <T as ipt::Config>::ExistentialDeposit::get(),
@@ -482,26 +598,12 @@ pub mod pallet {
                     allow_replica: info.allow_replica,
                 });
 
-                Self::deposit_event(Event::Removed(
-                    caller_account,
-                    ips_id,
-                    if let Some(metadata) = new_metadata {
-                        metadata
-                    } else {
-                        info.metadata.to_vec()
-                    },
-                    assets,
-                ));
-
                 Ok(())
             })
         }
 
-        /// Allows replicas of this IPS to be made.
-        #[pallet::weight(100_000)]
-        pub fn allow_replica(owner: OriginFor<T>, ips_id: T::IpsId) -> DispatchResult {
+        pub fn internal_allow_replica(owner: T::AccountId, ips_id: T::IpsId) -> DispatchResult {
             IpsStorage::<T>::try_mutate_exists(ips_id, |ips_info| -> DispatchResult {
-                let owner = ensure_signed(owner)?;
                 let info = ips_info.take().ok_or(Error::<T>::IpsNotFound)?;
 
                 match info.parentage.clone() {
@@ -526,17 +628,12 @@ pub mod pallet {
                     allow_replica: true,
                 });
 
-                Self::deposit_event(Event::AllowedReplica(ips_id));
-
                 Ok(())
             })
         }
 
-        /// Disallows replicas of this IPS to be made.
-        #[pallet::weight(100_000)]
-        pub fn disallow_replica(owner: OriginFor<T>, ips_id: T::IpsId) -> DispatchResult {
+        pub fn internal_disallow_replica(owner: T::AccountId, ips_id: T::IpsId) -> DispatchResult {
             IpsStorage::<T>::try_mutate_exists(ips_id, |ips_info| -> DispatchResult {
-                let owner = ensure_signed(owner)?;
                 let info = ips_info.take().ok_or(Error::<T>::IpsNotFound)?;
 
                 match info.parentage.clone() {
@@ -561,20 +658,15 @@ pub mod pallet {
                     allow_replica: false,
                 });
 
-                Self::deposit_event(Event::DisallowedReplica(ips_id));
-
                 Ok(())
             })
         }
 
-        #[pallet::weight(100_000)]
-        pub fn create_replica(
-            owner: OriginFor<T>,
+        pub fn internal_create_replica(
+            creator: T::AccountId,
             original_ips_id: T::IpsId,
-        ) -> DispatchResultWithPostInfo {
-            NextIpsId::<T>::try_mutate(|ips_id| -> DispatchResultWithPostInfo {
-                let creator = ensure_signed(owner.clone())?;
-
+        ) -> DispatchResult {
+            NextIpsId::<T>::try_mutate(|ips_id| -> DispatchResult {
                 let original_ips =
                     IpsStorage::<T>::get(original_ips_id).ok_or(Error::<T>::IpsNotFound)?;
 
@@ -590,10 +682,11 @@ pub mod pallet {
                 );
 
                 pallet_balances::Pallet::<T>::transfer_keep_alive(
-                    owner.clone(),
+                    RawOrigin::Signed(creator.clone()).into(),
                     T::Lookup::unlookup(ips_account.clone()),
                     <T as pallet_balances::Config>::ExistentialDeposit::get(),
-                )?;
+                )
+                .map_err(|_| DispatchError::Other("transfer_keep_alive error."))?;
 
                 ipt::Pallet::<T>::create(
                     ips_account.clone(),
@@ -618,7 +711,7 @@ pub mod pallet {
                     original_ips_id,
                 ));
 
-                Ok(().into())
+                Ok(())
             })
         }
     }

@@ -5,4 +5,5 @@ members = [
     "INV4/pallet-ipf",
     "INV4/pallet-ipt",
     "INV4/pallet-ipvm",
+    "primitives",
 ]
