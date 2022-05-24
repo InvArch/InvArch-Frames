@@ -372,6 +372,8 @@ pub mod pallet {
             );
 
             if owner_balance > total_per_threshold {
+                // SPB M2 review: the fee calculation & payment logic should probably
+                // factored out of this pallet.
                 pallet_balances::Pallet::<T>::transfer(
                     caller,
                     <<T as frame_system::Config>::Lookup as StaticLookup>::unlookup(
@@ -404,6 +406,8 @@ pub mod pallet {
                     dispatch_result.is_ok(),
                 ));
             } else {
+                // SPB M2 review: the fee calculation & payment logic should probably
+                // factored out of this pallet.
                 pallet_balances::Pallet::<T>::transfer(
                     caller,
                     <<T as frame_system::Config>::Lookup as StaticLookup>::unlookup(

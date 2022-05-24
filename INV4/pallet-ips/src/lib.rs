@@ -195,6 +195,28 @@ pub mod pallet {
     /// Dispatch functions
     #[pallet::call]
     impl<T: Config> Pallet<T> {
+        // SBP M2 review:
+        // 1. Dispatchable call taking many args, with unbounded vectors.
+        //    You should strive to use bounded vecs as much as possible.
+        // 2. Dispatchable calls should all be benchmarked.
+        // 3. Anyone can create an IPSet, and there doesn't seem to be any form
+        //    spam/DoS countermeasures (economic disincentives e.g. a deposit).
+        //    That plus the use of unbounded vectors could be abused to DoS the chain.
+        // 4. The code is generally very complex, does not include comments, and uses
+        //    short / generic variable names (ip*) .. this could hurt maintenance long term.
+        //    Also, don't hesitate to factor pieces of logic out into small private funcs.
+        // 5. Because of code complexity, we would encourage you to implement a full test suite
+        //    and add test code coverage reports to your CI builds.
+        // 6. The dispatchable calls generally perform many interactions with the chain storage,
+        //    including the calls to other pallet's functions.
+        //    These should be optimized and reduced to the minimum, you might have to break down
+        //    some of the existing calls, and potentially reconsider the boundaries between
+        //    the various pallets that make up the higher level solution.
+        // 7. Use of many .clone(), some of them might be unecessary / avoidable.
+        //    Consider the chain's runtime as a resource-constrained execution environment,
+        //    and therefore strive to optimize resource usage (CPU, Mem, Storage) as much as
+        //    possible.
+
         /// Create IP (Intellectual Property) Set (IPS)
         #[pallet::weight(100_000 + T::DbWeight::get().reads_writes(1, 2))]
         pub fn create_ips(
