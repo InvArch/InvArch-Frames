@@ -16,13 +16,12 @@ use sp_std::{boxed::Box, vec, vec::Vec};
 pub type OpaqueCall<T> = WrapperKeepOpaque<<T as Config>::Call>;
 
 #[derive(Clone, Encode, Decode, RuntimeDebug, MaxEncodedLen, TypeInfo)]
-pub struct MultisigOperation<AccountId, Signers, Call, Args> {
+pub struct MultisigOperation<AccountId, Signers, Call> {
     signers: Signers,
     include_original_caller: bool,
     original_caller: AccountId,
     actual_call: Call,
     call_metadata: [u8; 2],
-    call_arguments: Args,
     call_weight: Weight,
 }
 
@@ -36,7 +35,6 @@ pub type MultisigOperationOf<T> = MultisigOperation<
         <T as Config>::MaxCallers,
     >,
     OpaqueCall<T>,
-    BoundedVec<u8, <T as pallet::Config>::MaxWasmPermissionBytes>,
 >;
 
 pub type SubAssetsWithEndowment<T> = Vec<(
@@ -137,7 +135,8 @@ impl<T: Config> Pallet<T> {
         let total_issuance = ipt.supply
             + SubAssets::<T>::iter_prefix_values(ipt_id.0)
                 .map(|sub_asset| {
-                    let supply = IpStorage::<T>::get(sub_asset.id)?.supply;
+                    let supply =
+                        Balance::<T>::iter_prefix_values((ipt_id.0, Some(sub_asset.id))).sum();
 
                     if let OneOrPercent::ZeroPoint(weight) =
                         Pallet::<T>::asset_weight(ipt_id.0, sub_asset.id)?
@@ -168,18 +167,10 @@ impl<T: Config> Pallet<T> {
             .try_into()
             .map_err(|_| Error::<T>::CallHasTooFewBytes)?;
 
-        let call_arguments: BoundedVec<u8, T::MaxWasmPermissionBytes> =
-            call.encode().split_at(2).1.to_vec().try_into().unwrap(); // TODO: Remove unwrap
-
         let owner_balance: <T as Config>::Balance = if let OneOrPercent::ZeroPoint(percent) = {
             if let Some(sub_asset) = ipt_id.1 {
                 ensure!(
-                    Pallet::<T>::has_permission(
-                        ipt_id.0,
-                        sub_asset,
-                        call_metadata,
-                        call_arguments.clone()
-                    )?,
+                    Pallet::<T>::has_permission(ipt_id.0, sub_asset, call_metadata,)?,
                     Error::<T>::SubAssetHasNoPermission
                 );
 
@@ -202,7 +193,7 @@ impl<T: Config> Pallet<T> {
             Error::<T>::MultisigOperationAlreadyExists
         );
 
-        if owner_balance > total_per_threshold {
+        if owner_balance >= total_per_threshold {
             pallet_balances::Pallet::<T>::transfer(
                 caller,
                 <<T as frame_system::Config>::Lookup as StaticLookup>::unlookup(
@@ -261,7 +252,6 @@ impl<T: Config> Pallet<T> {
                     original_caller: owner.clone(),
                     actual_call: opaque_call.clone(),
                     call_metadata,
-                    call_arguments,
                     call_weight: call.get_dispatch_info().weight,
                 },
             );
@@ -298,12 +288,7 @@ impl<T: Config> Pallet<T> {
             let voter_balance = if let OneOrPercent::ZeroPoint(percent) = {
                 if let Some(sub_asset) = ipt_id.1 {
                     ensure!(
-                        Pallet::<T>::has_permission(
-                            ipt_id.0,
-                            sub_asset,
-                            old_data.call_metadata,
-                            old_data.call_arguments.clone()
-                        )?,
+                        Pallet::<T>::has_permission(ipt_id.0, sub_asset, old_data.call_metadata,)?,
                         Error::<T>::SubAssetHasNoPermission
                     );
 
@@ -344,7 +329,8 @@ impl<T: Config> Pallet<T> {
             let total_issuance = ipt.supply
                 + SubAssets::<T>::iter_prefix_values(ipt_id.0)
                     .map(|sub_asset| {
-                        let supply = IpStorage::<T>::get(sub_asset.id)?.supply;
+                        let supply =
+                            Balance::<T>::iter_prefix_values((ipt_id.0, Some(sub_asset.id))).sum();
 
                         if let OneOrPercent::ZeroPoint(weight) =
                             Pallet::<T>::asset_weight(ipt_id.0, sub_asset.id)?
@@ -371,7 +357,7 @@ impl<T: Config> Pallet<T> {
             let fee: <T as pallet::Config>::Balance =
                 T::WeightToFee::weight_to_fee(&old_data.call_weight).into();
 
-            if (total_in_operation + voter_balance) > total_per_threshold {
+            if (total_in_operation + voter_balance) >= total_per_threshold {
                 pallet_balances::Pallet::<T>::transfer(
                     caller,
                     <<T as frame_system::Config>::Lookup as StaticLookup>::unlookup(
